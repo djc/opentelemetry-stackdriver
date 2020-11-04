@@ -22,7 +22,6 @@
 
 use derivative::Derivative;
 use futures::stream::StreamExt;
-use hyper::client::connect::Connect;
 use opentelemetry::{
   api::core::Value,
   exporter::trace::{ExportResult, SpanData, SpanExporter},
@@ -88,8 +87,7 @@ pub struct StackDriverExporter {
 impl StackDriverExporter {
   /// If `num_concurrent_requests` is set to `0` or `None` then no limit is enforced.
   pub async fn connect<S: futures::task::Spawn>(
-    credentials_path: impl AsRef<std::path::Path>,
-    persistent_token_file: impl Into<Option<std::path::PathBuf>>,
+    //persistent_token_file: impl Into<Option<std::path::PathBuf>>,
     spawn: &S,
     maximum_shutdown_duration: Option<Duration>,
     num_concurrent_requests: impl Into<Option<usize>>,
@@ -97,6 +95,7 @@ impl StackDriverExporter {
     let num_concurrent_requests = num_concurrent_requests.into();
     let uri = http::uri::Uri::from_static("https://cloudtrace.googleapis.com:443");
 
+    /*
     let service_account_key = yup_oauth2::read_service_account_key(&credentials_path).await?;
     let project_name = service_account_key.project_id.as_ref().ok_or("project_id is missing")?.clone();
     let mut authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(service_account_key);
@@ -104,6 +103,7 @@ impl StackDriverExporter {
       authenticator = authenticator.persist_tokens_to_disk(persistent_token_file);
     }
     let authenticator = authenticator.build().await?;
+    */
 
     let mut rustls_config = rustls::ClientConfig::new();
     rustls_config.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
@@ -116,8 +116,8 @@ impl StackDriverExporter {
     spawn.spawn_obj(
       Box::new(Self::export_inner(
         TraceServiceClient::new(channel),
-        authenticator,
-        project_name,
+        None,
+        "nominl-trace-test".to_owned(),
         rx,
         pending_count.clone(),
         num_concurrent_requests,
@@ -136,16 +136,14 @@ impl StackDriverExporter {
     self.pending_count.load(Ordering::Relaxed)
   }
 
-  async fn export_inner<C>(
+  async fn export_inner(
     client: TraceServiceClient<Channel>,
-    authenticator: Authenticator<C>,
+    authenticator: Option<Authenticator<hyper_rustls::HttpsConnector<hyper::client::connect::HttpConnector>>>,
     project_name: String,
     rx: futures::channel::mpsc::Receiver<Vec<Arc<SpanData>>>,
     pending_count: Arc<AtomicUsize>,
     num_concurrent: impl Into<Option<usize>>,
-  ) where
-    C: Connect + Clone + Send + Sync + 'static,
-  {
+  ) {
     let authenticator = &authenticator;
     rx.for_each_concurrent(num_concurrent, move |batch| {
       let mut client = client.clone(); // This clone is cheap and allows for concurrent requests (see https://github.com/hyperium/tonic/issues/285#issuecomment-595880400)
@@ -156,15 +154,20 @@ impl StackDriverExporter {
           span::{time_event::Value, Attributes, TimeEvents},
           Span,
         };
-        let scopes = &["https://www.googleapis.com/auth/trace.append"];
-        let token = authenticator.token(scopes).await;
-        log::trace!("Got StackDriver auth token: {:?}", token);
-        let bearer_token = match token {
-          Ok(token) => format!("Bearer {}", token.as_str()),
-          Err(e) => {
-            log::error!("StackDriver authentication failed {:?}", e);
-            return;
+
+        let token = if let Some(auth) = authenticator {
+          let scopes = &["https://www.googleapis.com/auth/trace.append"];
+          let token = auth.token(scopes).await;
+          log::trace!("Got StackDriver auth token: {:?}", token);
+          match token {
+            Ok(token) => Some(format!("Bearer {}", token.as_str())),
+            Err(e) => {
+              log::error!("StackDriver authentication failed {:?}", e);
+              return;
+            }
           }
+        } else {
+          None
         };
 
         let spans = batch
@@ -217,7 +220,10 @@ impl StackDriverExporter {
           spans,
         };
         client
-          .batch_write_spans(AuthenticatedRequest::new(req, &bearer_token))
+          .batch_write_spans(AuthenticatedRequest {
+            inner: req,
+            auth: token.as_deref(),
+          })
           .await
           .map_err(|e| {
             log::error!("StackDriver push failed {:?}", e);
@@ -232,21 +238,15 @@ impl StackDriverExporter {
 
 struct AuthenticatedRequest<'a, T> {
   inner: T,
-  auth: &'a str,
-}
-
-impl<'a, T> AuthenticatedRequest<'a, T> {
-  pub fn new(inner: T, auth: &'a str) -> Self {
-    Self { inner, auth }
-  }
+  auth: Option<&'a str>,
 }
 
 impl<T> IntoRequest<T> for AuthenticatedRequest<'_, T> {
   fn into_request(self) -> Request<T> {
     let mut req = Request::new(self.inner);
-    req
-      .metadata_mut()
-      .insert("authorization", MetadataValue::from_str(&self.auth).unwrap());
+    if let Some(token) = self.auth {
+      req.metadata_mut().insert("authorization", MetadataValue::from_str(token).unwrap());
+    }
     req
   }
 }
