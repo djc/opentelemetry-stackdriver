@@ -173,6 +173,12 @@ impl StackDriverExporter {
         let spans = batch
           .into_iter()
           .map(|span| {
+            println!(
+              "trace id: {:?}, name: {}, status: {}",
+              span.span_context.trace_id(),
+              span.name,
+              span.status_message
+            );
             let new_attributes = Attributes {
               attribute_map: span
                 .attributes
