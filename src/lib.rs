@@ -158,11 +158,11 @@ impl StackDriverExporter {
         let token = if let Some(auth) = authenticator {
           let scopes = &["https://www.googleapis.com/auth/trace.append"];
           let token = auth.token(scopes).await;
-          log::trace!("Got StackDriver auth token: {:?}", token);
+          eprintln!("Got StackDriver auth token: {:?}", token);
           match token {
             Ok(token) => Some(format!("Bearer {}", token.as_str())),
             Err(e) => {
-              log::error!("StackDriver authentication failed {:?}", e);
+              eprintln!("StackDriver authentication failed {:?}", e);
               return;
             }
           }
@@ -226,7 +226,7 @@ impl StackDriverExporter {
           })
           .await
           .map_err(|e| {
-            log::error!("StackDriver push failed {:?}", e);
+            eprintln!("StackDriver push failed {:?}", e);
           })
           .ok();
         pending_count.fetch_sub(1, Ordering::Relaxed);
@@ -255,7 +255,7 @@ impl SpanExporter for StackDriverExporter {
   fn export(&self, batch: Vec<Arc<SpanData>>) -> ExportResult {
     match self.tx.clone().try_send(batch) {
       Err(e) => {
-        log::error!("Unable to send to export_inner {:?}", e);
+        eprintln!("Unable to send to export_inner {:?}", e);
         if e.is_disconnected() {
           ExportResult::FailedNotRetryable
         } else {
