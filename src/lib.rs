@@ -89,13 +89,14 @@ impl StackDriverExporter {
   pub async fn connect<S: futures::task::Spawn>(
     //persistent_token_file: impl Into<Option<std::path::PathBuf>>,
     spawn: &S,
+    credentials_path: impl AsRef<std::path::Path>,
+    persistent_token_file: impl Into<Option<std::path::PathBuf>>,
     maximum_shutdown_duration: Option<Duration>,
     num_concurrent_requests: impl Into<Option<usize>>,
   ) -> Result<Self, Box<dyn std::error::Error>> {
     let num_concurrent_requests = num_concurrent_requests.into();
     let uri = http::uri::Uri::from_static("https://cloudtrace.googleapis.com:443");
 
-    /*
     let service_account_key = yup_oauth2::read_service_account_key(&credentials_path).await?;
     let project_name = service_account_key.project_id.as_ref().ok_or("project_id is missing")?.clone();
     let mut authenticator = yup_oauth2::ServiceAccountAuthenticator::builder(service_account_key);
@@ -103,7 +104,6 @@ impl StackDriverExporter {
       authenticator = authenticator.persist_tokens_to_disk(persistent_token_file);
     }
     let authenticator = authenticator.build().await?;
-    */
 
     let mut rustls_config = rustls::ClientConfig::new();
     rustls_config.root_store.add_server_trust_anchors(&webpki_roots::TLS_SERVER_ROOTS);
@@ -116,8 +116,8 @@ impl StackDriverExporter {
     spawn.spawn_obj(
       Box::new(Self::export_inner(
         TraceServiceClient::new(channel),
-        None,
-        "nominl-trace-test".to_owned(),
+        authenticator,
+        project_name,
         rx,
         pending_count.clone(),
         num_concurrent_requests,
@@ -138,7 +138,7 @@ impl StackDriverExporter {
 
   async fn export_inner(
     client: TraceServiceClient<Channel>,
-    authenticator: Option<Authenticator<hyper_rustls::HttpsConnector<hyper::client::connect::HttpConnector>>>,
+    authenticator: Authenticator<hyper_rustls::HttpsConnector<hyper::client::connect::HttpConnector>>,
     project_name: String,
     rx: futures::channel::mpsc::Receiver<Vec<Arc<SpanData>>>,
     pending_count: Arc<AtomicUsize>,
@@ -155,19 +155,15 @@ impl StackDriverExporter {
           Span,
         };
 
-        let token = if let Some(auth) = authenticator {
-          let scopes = &["https://www.googleapis.com/auth/trace.append"];
-          let token = auth.token(scopes).await;
-          eprintln!("Got StackDriver auth token: {:?}", token);
-          match token {
-            Ok(token) => Some(format!("Bearer {}", token.as_str())),
-            Err(e) => {
-              eprintln!("StackDriver authentication failed {:?}", e);
-              return;
-            }
+        let scopes = &["https://www.googleapis.com/auth/trace.append"];
+        let token = authenticator.token(scopes).await;
+        eprintln!("Got StackDriver auth token: {:?}", token);
+        let token = match token {
+          Ok(token) => Some(format!("Bearer {}", token.as_str())),
+          Err(e) => {
+            eprintln!("StackDriver authentication failed {:?}", e);
+            return;
           }
-        } else {
-          None
         };
 
         let spans = batch
