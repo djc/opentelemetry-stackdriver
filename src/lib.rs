@@ -203,7 +203,7 @@ impl StackDriverExporter {
         });
 
         if let Err(e) = authorizer.authorize(&mut req).await {
-          log::error!("StackDriver authentication failed {}", e);
+          eprintln!("StackDriver authentication failed {}", e);
           return;
         }
 
@@ -211,7 +211,7 @@ impl StackDriverExporter {
           .batch_write_spans(req)
           .await
           .map_err(|e| {
-            log::error!("StackDriver push failed {}", e);
+            eprintln!("StackDriver push failed {}", e);
           })
           .ok();
         pending_count.fetch_sub(1, Ordering::Relaxed);
@@ -225,7 +225,7 @@ impl SpanExporter for StackDriverExporter {
   fn export(&self, batch: Vec<Arc<SpanData>>) -> ExportResult {
     match self.tx.clone().try_send(batch) {
       Err(e) => {
-        log::error!("Unable to send to export_inner {:?}", e);
+        eprintln!("Unable to send to export_inner {:?}", e);
         if e.is_disconnected() {
           ExportResult::FailedNotRetryable
         } else {
