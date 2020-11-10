@@ -155,28 +155,23 @@ impl StackDriverExporter {
         let spans = batch
           .into_iter()
           .map(|span| {
-            let new_attributes = Attributes {
-              attribute_map: span
-                .attributes
-                .iter()
-                .map(|(key, value)| (key.as_str().to_owned(), value.clone().into()))
-                .collect(),
-              ..Default::default()
-            };
-            let new_time_events = TimeEvents {
-              time_event: span
-                .message_events
-                .iter()
-                .map(|event| TimeEvent {
-                  time: Some(event.timestamp.into()),
-                  value: Some(Value::Annotation(Annotation {
-                    description: Some(to_truncate(event.name.clone())),
-                    ..Default::default()
-                  })),
-                })
-                .collect(),
-              ..Default::default()
-            };
+            let attribute_map = span
+              .attributes
+              .iter()
+              .map(|(key, value)| (key.as_str().to_owned(), value.clone().into()))
+              .collect();
+
+            let time_event = span
+              .message_events
+              .iter()
+              .map(|event| TimeEvent {
+                time: Some(event.timestamp.into()),
+                value: Some(Value::Annotation(Annotation {
+                  description: Some(to_truncate(event.name.clone())),
+                  ..Default::default()
+                })),
+              })
+              .collect();
 
             Span {
               name: format!(
@@ -190,8 +185,14 @@ impl StackDriverExporter {
               parent_span_id: hex::encode(span.parent_span_id.to_u64().to_be_bytes()),
               start_time: Some(span.start_time.into()),
               end_time: Some(span.end_time.into()),
-              attributes: Some(new_attributes),
-              time_events: Some(new_time_events),
+              attributes: Some(Attributes {
+                attribute_map,
+                ..Default::default()
+              }),
+              time_events: Some(TimeEvents {
+                time_event,
+                ..Default::default()
+              }),
               ..Default::default()
             }
           })
@@ -204,16 +205,9 @@ impl StackDriverExporter {
 
         if let Err(e) = authorizer.authorize(&mut req).await {
           eprintln!("StackDriver authentication failed {}", e);
-          return;
+        } else if let Err(e) = client.batch_write_spans(req).await {
+          eprintln!("StackDriver push failed {}", e);
         }
-
-        client
-          .batch_write_spans(req)
-          .await
-          .map_err(|e| {
-            eprintln!("StackDriver push failed {}", e);
-          })
-          .ok();
         pending_count.fetch_sub(1, Ordering::Relaxed);
       }
     })
