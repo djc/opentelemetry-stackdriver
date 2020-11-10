@@ -35,11 +35,13 @@ use std::{
   },
   time::{Duration, Instant},
 };
+#[cfg(feature = "yup-oauth2")]
+use tonic::MetadataValue;
 use tonic::{
-  metadata::MetadataValue,
   transport::{Channel, ClientTlsConfig},
   Request,
 };
+#[cfg(feature = "yup-oauth2")]
 use yup_oauth2::authenticator::Authenticator;
 
 pub mod proto {
@@ -267,11 +269,13 @@ pub trait Authorizer: Sync + Send + 'static {
   async fn authorize<T: Send + Sync>(&self, request: &mut Request<T>) -> Result<(), Self::Error>;
 }
 
+#[cfg(feature = "yup-oauth2")]
 pub struct YupAuthorizer {
   authenticator: Authenticator<hyper_rustls::HttpsConnector<hyper::client::HttpConnector>>,
   project_id: String,
 }
 
+#[cfg(feature = "yup-oauth2")]
 impl YupAuthorizer {
   pub async fn new(
     credentials_path: impl AsRef<std::path::Path>,
@@ -291,6 +295,7 @@ impl YupAuthorizer {
   }
 }
 
+#[cfg(feature = "yup-oauth2")]
 #[async_trait]
 impl Authorizer for YupAuthorizer {
   type Error = Box<dyn std::error::Error + Send + Sync>;
